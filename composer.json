@@ -1,0 +1,31 @@
+{
+  "name": "shevartv/mxmigrations",
+  "description": "Расширяемый раннер и генератор миграций для MODX Revolution 2",
+  "type": "project",
+  "license": "GPL-2.0-or-later",
+  "require": {
+    "php": ">=7.4"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^9.6"
+  },
+  "autoload": {
+    "psr-4": {
+      "MxMigrations\\": "core/components/mxmigrations/src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "MxMigrations\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "phpunit"
+  },
+  "config": {
+    "platform": {
+      "php": "7.4.33"
+    },
+    "sort-packages": true
+  }
+}

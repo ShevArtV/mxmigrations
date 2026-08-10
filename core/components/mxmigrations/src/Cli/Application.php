@@ -1,0 +1,187 @@
+<?php
+
+namespace MxMigrations\Cli;
+
+use MxMigrations\Config\ProjectConfig;
+use MxMigrations\Core\MigrationRunner;
+use MxMigrations\Core\MigrationWriter;
+use MxMigrations\Platform\Modx2\ModxExecutor;
+use MxMigrations\Platform\Modx2\MysqlLock;
+use MxMigrations\Platform\Modx2\PdoJournal;
+use MxMigrations\Recipe\MigrationGenerator;
+use MxMigrations\Recipe\RecipeRegistry;
+use MxMigrations\Recipe\RecipeRegistryFactory;
+
+final class Application
+{
+    private ProjectConfig $config;
+    private RecipeRegistry $recipes;
+
+    public function __construct(ProjectConfig $config)
+    {
+        $this->config = $config;
+        $this->recipes = (new RecipeRegistryFactory())->create($config);
+    }
+
+    /** @param array<int, string> $argv */
+    public function run(array $argv): int
+    {
+        [$command, $positionals, $options] = $this->parse($argv);
+        switch ($command) {
+            case 'recipe:list':
+                foreach ($this->recipes->all() as $recipe) {
+                    printf("%-32s %s\n", $recipe->getName(), $recipe->getDescription());
+                }
+                return 0;
+            case 'recipe:help':
+                $name = $positionals[0] ?? '';
+                $recipe = $this->recipes->get($name);
+                echo $recipe->getName() . ' — ' . $recipe->getDescription() . PHP_EOL;
+                foreach ($recipe->getOptions() as $option => $description) {
+                    echo '  --' . $option . '  ' . $description . PHP_EOL;
+                }
+                return 0;
+            case 'new':
+                return $this->generate($positionals, $options);
+            case 'status':
+                return $this->status($this->runner(), isset($options['strict']));
+            case 'up':
+                return $this->up($this->runner(), $options);
+            case 'baseline':
+                $marked = $this->runner()->baseline((string)($options['by'] ?? $this->whoami()));
+                echo $marked ? 'Baseline: ' . implode(', ', $marked) . PHP_EOL : 'Нечего помечать.' . PHP_EOL;
+                return 0;
+            case 'help':
+                echo $this->usage();
+                return 0;
+            default:
+                throw new \InvalidArgumentException('Неизвестная команда: ' . $command . PHP_EOL . $this->usage());
+        }
+    }
+
+    /** @param array<int, string> $positionals @param array<string, mixed> $options */
+    private function generate(array $positionals, array $options): int
+    {
+        $slug = $positionals[0] ?? '';
+        if ($slug === '') {
+            throw new \InvalidArgumentException('Укажите слаг новой миграции.');
+        }
+        $recipe = (string)($options['recipe'] ?? 'empty');
+        $write = isset($options['apply']);
+        unset($options['recipe'], $options['apply'], $options['config']);
+        $result = (new MigrationGenerator(
+            new MigrationWriter($this->config->getMigrationsPath()),
+            $this->recipes
+        ))->generate($slug, $recipe, $options, $write);
+
+        if ($result['path'] !== null) {
+            echo 'Создана миграция: ' . $result['path'] . PHP_EOL;
+        } else {
+            echo 'Будет создана: ' . $result['name'] . PHP_EOL . PHP_EOL . $result['body'];
+            echo PHP_EOL . 'Для записи добавьте --apply.' . PHP_EOL;
+        }
+        return 0;
+    }
+
+    private function runner(): MigrationRunner
+    {
+        $modx = $this->modx();
+        return new MigrationRunner(
+            $this->config->getMigrationsPath(),
+            new PdoJournal($modx, $this->config->getJournalTable()),
+            new ModxExecutor($modx),
+            new MysqlLock($modx, $this->config->getLockName())
+        );
+    }
+
+    private function status(MigrationRunner $runner, bool $strict): int
+    {
+        $plan = $runner->plan();
+        foreach (['pending', 'drifted', 'missing', 'outOfOrder'] as $group) {
+            echo $group . ': ' . count($plan[$group]) . PHP_EOL;
+        }
+        echo 'applied: ' . count($plan['applied']) . PHP_EOL;
+        $problems = $plan['pending'] || $plan['drifted'] || $plan['missing'] || $plan['outOfOrder'];
+        return $strict && $problems ? 2 : 0;
+    }
+
+    /** @param array<string, mixed> $options */
+    private function up(MigrationRunner $runner, array $options): int
+    {
+        $result = $runner->up(
+            isset($options['dry-run']),
+            isset($options['ignore-checksum']),
+            (string)($options['by'] ?? $this->whoami()),
+            isset($options['allow-out-of-order'])
+        );
+        foreach ($result['executed'] as $migration) {
+            echo ($result['dryRun'] ? '[DRY] ' : '[OK] ') . $migration['name'] . PHP_EOL;
+        }
+        foreach ($result['accepted'] as $name) {
+            echo '[ACCEPTED] ' . $name . PHP_EOL;
+        }
+        if ($result['failed'] !== null) {
+            fwrite(STDERR, '[FAILED] ' . $result['failed']['name'] . ': ' . $result['failed']['error'] . PHP_EOL);
+            return 1;
+        }
+        if (!$result['executed'] && !$result['accepted']) {
+            echo 'Нечего применять.' . PHP_EOL;
+        }
+        return 0;
+    }
+
+    private function modx(): \modX
+    {
+        $index = $this->config->getModxRoot() . '/index.php';
+        if (!is_file($index)) {
+            throw new \RuntimeException('index.php MODX не найден: ' . $index);
+        }
+        if (!defined('MODX_API_MODE')) {
+            define('MODX_API_MODE', true);
+        }
+        /** @var mixed $modx */
+        $modx = null;
+        require $index;
+        if (!$modx instanceof \modX) {
+            throw new \RuntimeException('MODX не инициализирован после подключения ' . $index . '.');
+        }
+        $modx->getService('error', 'error.modError');
+        $modx->setLogLevel(\xPDO::LOG_LEVEL_ERROR);
+
+        return $modx;
+    }
+
+    /** @param array<int, string> $argv
+     *  @return array{0: string, 1: array<int, string>, 2: array<string, mixed>}
+     */
+    private function parse(array $argv): array
+    {
+        $command = 'help';
+        $positionals = [];
+        $options = [];
+        foreach ($argv as $argument) {
+            if (strpos($argument, '--') === 0) {
+                $pair = explode('=', substr($argument, 2), 2);
+                $options[$pair[0]] = $pair[1] ?? true;
+            } elseif ($command === 'help') {
+                $command = $argument;
+            } else {
+                $positionals[] = $argument;
+            }
+        }
+        return [$command, $positionals, $options];
+    }
+
+    private function whoami(): string
+    {
+        return trim((string)get_current_user() . '@' . (string)gethostname(), '@');
+    }
+
+    private function usage(): string
+    {
+        return "mxMigrations\n"
+            . "  status [--strict]\n  up [--dry-run] [--ignore-checksum] [--allow-out-of-order]\n"
+            . "  baseline [--by=name]\n  new <slug> [--recipe=name] [recipe options] [--apply]\n"
+            . "  recipe:list\n  recipe:help <name>\n";
+    }
+}

@@ -1,0 +1,7 @@
+1.0.0-beta
+==============
+- FEATURE: Раннер PHP-миграций с журналом, checksum, baseline и защитой порядка.
+- FEATURE: Генератор автономных миграций со встроенными типовыми рецептами.
+- FEATURE: Публичный API проектных рецептов с namespace имён и проверкой конфликтов.
+- FEATURE: CLI-команды status, up, baseline, new, recipe:list и recipe:help.
+
