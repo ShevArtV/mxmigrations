@@ -28,9 +28,10 @@ final class ModelBuilder
             $generator->parseSchema($schemaPath, $root . '/');
             $this->files->normalize($root);
             $built = $this->files->generatedRoot($root, (new SchemaDocument($schemaPath))->getPackage());
-            $managed = static function (string $relative, ?string $current = null): bool {
-                return substr(strtolower($relative), -12) === '.map.inc.php'
-                    || ModelFilesystem::isGeneratedClass($current);
+            $managed = static function (string $relative): bool {
+                $relative = str_replace('\\', '/', strtolower($relative));
+                return strpos($relative, 'mysql/') === 0
+                    || basename($relative) === 'metadata.mysql.php';
             };
             $diff = $this->files->diff($modelPath, $built, $managed);
             if ($apply) { $this->files->apply($modelPath, $built, $managed); }
