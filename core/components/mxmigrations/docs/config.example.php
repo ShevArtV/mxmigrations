@@ -1,11 +1,22 @@
 <?php
 
+$root = dirname(__DIR__, 2);
+
 return [
-    'id' => 'example',
-    'modx_root' => dirname(__DIR__, 4),
-    'migrations_path' => dirname(__DIR__, 4) . '/core/components/example/migrations',
-    'journal_table' => 'example_migrations',
-    'lock_name' => 'example_migrations',
-    'autoload' => [dirname(__DIR__, 4) . '/core/components/example/vendor/autoload.php'],
-    'recipe_providers' => [Example\Migrations\RecipeProvider::class],
+    'id' => 'site',
+    'modx_root' => $root,
+    'migrations_path' => $root . '/core/migrations',
+    'models' => [
+        'site' => [
+            'schema_path' => $root . '/core/components/site/model/schema/site.mysql.schema.xml',
+            'model_path' => $root . '/core/components/site/model/site',
+        ],
+        'minishop2' => [
+            'schema_path' => $root . '/core/components/minishop2/model/schema/minishop2.mysql.schema.xml',
+            'model_path' => $root . '/core/components/minishop2/model/minishop2',
+            'overlay' => true,
+        ],
+    ],
+    'autoload' => [$root . '/core/components/site/vendor/autoload.php'],
+    'recipe_providers' => [Site\Migrations\RecipeProvider::class],
 ];
